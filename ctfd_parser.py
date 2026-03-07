@@ -99,7 +99,14 @@ class CTFdParser(object):
         r = self.session.get(self.target + "/api/v1/challenges")
 
         if r.status_code == 200:
-            json_challs = json.loads(r.content)
+            if not r.content or not r.content.strip():
+                print("[warn] /api/v1/challenges returned an empty response — challenges may not be available yet.")
+                return None
+            try:
+                json_challs = json.loads(r.content)
+            except json.JSONDecodeError:
+                print("[warn] /api/v1/challenges returned invalid JSON — challenges may not be available yet.")
+                return None
             if json_challs is not None:
                 if json_challs['success']:
                     self.challenges = json_challs['data']
@@ -193,8 +200,11 @@ class CTFdParser(object):
         """Documentation for get_challenge_by_id"""
         r = self.session.get(self.target + f'/api/v1/challenges/{chall_id}')
         json_chall = None
-        if r.status_code == 200:
-            json_chall = json.loads(r.content)
+        if r.status_code == 200 and r.content and r.content.strip():
+            try:
+                json_chall = json.loads(r.content)
+            except json.JSONDecodeError:
+                pass
         return json_chall
 
     def get_json(self:object, url:str):
