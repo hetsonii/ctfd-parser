@@ -4,8 +4,8 @@
 # Author             : Podalirius (@podalirius_)
 # Last Update        : 28 December 2023
 
-import argparse
 import json
+import time
 import requests
 import re
 import os
@@ -29,12 +29,13 @@ def os_filename_sanitize(s:str) -> str:
 
 class CTFdParser(object):
 
-    def __init__(self:object, target:str, login:str,password:str,basedir:str="Challenges",initfile:str=False) -> None:
+    def __init__(self:object, target:str, login:str=None, password:str=None, basedir:str="Challenges", initfile:str=False, token:str=None) -> None:
         super(CTFdParser, self).__init__()
         self.target = target
         self.basedir = basedir
         self.initfile = initfile
         self.challenges = {}
+        self.token = token
         self.credentials = {
             'user': login,
             'password': password
@@ -45,6 +46,11 @@ class CTFdParser(object):
         self.pwu = os.path.join(ROOT, "template", "writeup.md")
 
     def login(self:object) -> bool:
+        if self.token:
+            self.session.headers.update({'Authorization': f'Token {self.token}'})
+            r = self.session.get(self.target + '/api/v1/challenges')
+            return r.status_code == 200
+
         r = self.session.get(self.target + '/login')
         matched = re.search(
             b"""('csrfNonce':[ \t]+"([a-f0-9A-F]+))""", r.content)
@@ -64,8 +70,9 @@ class CTFdParser(object):
         return 'Your username or password is incorrect' not in r.text
 
     def get_report(self:object, threads:int=8) -> None:
-        threading.Timer(60.0, self.get_report).start()
-        self.get_challenges(threads,parse=False)
+        self._report_timer = threading.Timer(60.0, self.get_report, args=[threads])
+        self._report_timer.start()
+        self.get_challenges(threads, parse=False)
         unsolved_challenges = {}
 
         for index in range(len(self.challenges)):
@@ -279,110 +286,105 @@ def header() -> None:
       \_____|  |_|  |_|  \__,_| |_|   \__,_|_|  |___/\___|_|       @podalirius_
 """)
 
-def parseArgs() -> dict:
-    header()
-    parser = argparse.ArgumentParser(description="CTFdParser")
-    parser.add_argument("-t", "--target", required=False, help="CTFd target (domain or ip)")
-    parser.add_argument("-o", "--output", required=False, help="Output directory")
-    parser.add_argument("-u", "--user", required=False, help="Username to login to CTFd")
-    parser.add_argument("-p", "--password", required=False, help="Password to login to CTFd (default: interactive)")
-    parser.add_argument("-T", "--threads", required=False, default=8, type=int, help="Number of threads (default: 8)")
-    parser.add_argument("-D", "--dump", required=False, action="store_true", help="Dump info like users, teams and scoreboard (default: False)")
-    parser.add_argument("-R", "--report", required=False, action="store_true", help="Report most solved challenges (default: False)")
-    parser.add_argument("-v", "--verbose", default=False, action="store_true", help="Verbose mode. (default: False)")
-    parser.add_argument("-I", "--initfile", default=False, action="store_true", help="Init default files. (solve.py / writeup.md)")
-    args = parser.parse_args()
-    
-    config = {}
-    config['url'] = args.target
-    config['user'] = args.user
-    config['password'] = args.password
-    config['verbose'] = args.verbose
-    config['dump'] = args.dump
-    config['threads'] = args.threads
-    config["output"] = args.output
-    config['initfile'] = args.initfile
-    config['report'] = args.report
-    
-    return config
 
-def checkConfig() -> dict:
-    
-    pconfig = os.path.join(ROOT, "config.json")
-    if not os.path.exists(pconfig):
-        return None
-    
-    with open(pconfig,"rb") as f:
-        dconfig = f.read()
-        f.close()
-        
-    if not dconfig:
-        return None
-         
-    config = json.loads(dconfig)
-      
-    if not config.get("url") or not config.get("user") or not config.get("password"):
-        return None
+def prompt_credentials() -> tuple:
+    """Interactively ask for CTF URL and auth method (password or token)."""
+    while True:
+        url = input("CTF website URL: ").strip().rstrip('/')
+        if not url:
+            print("[!] URL cannot be empty.")
+            continue
+        if not url.startswith("http://") and not url.startswith("https://"):
+            url = "https://" + url
+        break
 
-    if not config.get("dump"):
-        config["dump"] = False
-    if not config.get("verbose"):
-        config["verbose"] = False
-    if not config.get("threads"):
-        config["threads"] = 8
-    if not config.get("output"):
-        config["output"] = None
-    if not config.get("initfile"):
-        config["initfile"] = None
-    if not config.get("report"):
-        config["report"] = False
-            
-    return config
+    print()
+    print("  Auth method:")
+    print("  [1] Username + Password")
+    print("  [2] Access token")
+    while True:
+        auth_choice = input("Choice [1/2]: ").strip()
+        if auth_choice in ("1", "2"):
+            break
+        print("[!] Please enter 1 or 2.")
+
+    if auth_choice == "2":
+        while True:
+            token = getpass("Access token: ")
+            if token:
+                break
+            print("[!] Token cannot be empty.")
+        return url, None, None, token
+
+    while True:
+        user = input("Username: ").strip()
+        if not user:
+            print("[!] Username cannot be empty.")
+            continue
+        break
+
+    password = getpass("Password: ")
+    return url, user, password, None
 
 
+def prompt_menu(cp: CTFdParser) -> None:
+    """Main interactive menu loop."""
+    default_output = os.path.join(os.getcwd(), "challs")
+
+    while True:
+        print()
+        print("=" * 40)
+        print("  What would you like to do?")
+        print("  [1] Dump all challenges")
+        print("  [2] Timely report (refreshes every 60s)")
+        print("  [3] Exit")
+        print("=" * 40)
+        choice = input("Choice: ").strip()
+
+        if choice == "1":
+            path_input = input(f"Output path [{default_output}]: ").strip()
+            output = path_input if path_input else default_output
+            cp.basedir = output
+            print(f"[>] Dumping challenges to: {output}")
+            cp.get_challenges(threads=8)
+            print("[+] Done! Returning to menu.\n")
+
+        elif choice == "2":
+            print("[>] Starting timely report. Press Ctrl-C to stop and return to menu.")
+            try:
+                cp.get_report(threads=8)
+                # Block until interrupted; the timer fires every 60 s on its own
+                while True:
+                    time.sleep(1)
+            except KeyboardInterrupt:
+                timer = getattr(cp, '_report_timer', None)
+                if timer is not None:
+                    timer.cancel()
+                print("\n[+] Report stopped. Returning to menu.")
+
+        elif choice == "3":
+            print("Bye!")
+            break
+
+        else:
+            print("[!] Invalid choice, please enter 1, 2, or 3.")
 
 
 def main() -> int:
-    config = checkConfig()
-    args = None
-    args_config = parseArgs()
-    if not config:
-        config = args_config
-    if args_config['report']:
-        config['report'] = True
+    header()
+    url, user, password, token = prompt_credentials()
 
-    
-    target = config['url']
-    output = config['output']
-    password = config['password']
-    user = config['user']
-    threads = config['threads']
-    dump = config['dump']
-    initfile = config['initfile']
-    report = config['report']
-    
-    if not target.startswith("http://") and not target.startswith("https://"):
-        target = "https://" + target
-    target = target.rstrip('/')
-    
-    if config['verbose']:
-        print(f"[>] Target URL: {target}")
-        
-    if output is None:
-        output = os.path.join(ROOT, "Challenges")
-    if user is not None and password is None:
-        password = getpass("Password: ")
+    cp = CTFdParser(url, user, password, token=token)
+    print("[>] Logging in...")
+    if not cp.login():
+        print("[-] Login failed. Check your credentials.")
+        return -1
+    print("[+] Logged in successfully!")
 
-    cp = CTFdParser(target, user, password, output, initfile)
-    if(user is not None):
-        if cp.login():
-            cp.invoke_command(threads=threads, dump=dump, report=report)
-        else:
-            print("[-] Login failed")
-            return -1
-    #cp.invoke_command(threads=threads, dump=dump)
+    prompt_menu(cp)
     return 0
+
 
 if __name__ == '__main__':
     main()
-    
+
