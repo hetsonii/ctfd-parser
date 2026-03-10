@@ -4,15 +4,13 @@ All methods return plain dicts/lists; no business logic here.
 """
 from __future__ import annotations
 
-import sys
 import time
-from typing import Any
 
 import requests
 
 
 _RETRY_ATTEMPTS = 3
-_RETRY_BACKOFF  = 2.0   # seconds; doubles on each retry
+_RETRY_BACKOFF  = 2.0
 
 
 class CTFdAPIError(RuntimeError):
@@ -96,6 +94,27 @@ class CTFdClient:
         if me.get("team_id"):
             return self.team_solves(me["team_id"])
         return self.user_solves(me["id"])
+
+    def my_standing(self) -> tuple[int | None, int, str]:
+        """
+        Return (rank, score, name) for the current user or team.
+        Rank is None if not yet on the scoreboard.
+        """
+        me      = self.me()
+        team_id = me.get("team_id")
+        name    = me.get("name", "?")
+
+        try:
+            board = self._get("/api/v1/scoreboard")["data"]
+            for entry in board:
+                if team_id and entry.get("account_id") == team_id:
+                    return entry.get("pos"), entry.get("score", 0), entry.get("name", name)
+                if not team_id and entry.get("account_id") == me["id"]:
+                    return entry.get("pos"), entry.get("score", 0), entry.get("name", name)
+        except CTFdAPIError:
+            pass
+
+        return None, 0, name
 
     def scoreboard(self) -> list[dict]:
         return self._get("/api/v1/scoreboard")["data"]
