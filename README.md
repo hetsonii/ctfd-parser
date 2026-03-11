@@ -1,56 +1,93 @@
-![](./.github/banner.png)
+<p align="center">
+  <img src=".github/banner.png" alt="CTFdParser" width="860"/>
+</p>
 
 <p align="center">
-    A python script to dump all the challenges locally of a CTFd-based Capture the Flag.
-    <br>
-    <img alt="GitHub release (latest by date)" src="https://img.shields.io/github/v/release/p0dalirius/ctfd-parser">
-    <a href="https://twitter.com/intent/follow?screen_name=podalirius_" title="Follow"><img src="https://img.shields.io/twitter/follow/podalirius_?label=Podalirius&style=social"></a>
-    <a href="https://www.youtube.com/c/Podalirius_?sub_confirmation=1" title="Subscribe"><img alt="YouTube Channel Subscribers" src="https://img.shields.io/youtube/channel/subscribers/UCF_x5O7CSfr82AfNVTKOv_A?style=social"></a>
-    <br>
+  A python tool to dump and manage challenges from any CTFd-based Capture the Flag.
+  <br><br>
+  <img alt="Python" src="https://img.shields.io/badge/python-3.10%2B-blue?style=flat-square&logo=python&logoColor=white">
+  <img alt="License" src="https://img.shields.io/badge/license-MIT-green?style=flat-square">
+  <img alt="Version" src="https://img.shields.io/badge/version-2.0-brightgreen?style=flat-square">
+  <a href="https://twitter.com/intent/follow?screen_name=hetsonii">
+    <img alt="Twitter Follow" src="https://img.shields.io/twitter/follow/hetsonii?style=social">
+  </a>
 </p>
+
+---
 
 ## Features
 
- - [x] Connects and logins to a remote CTFd instance.
- - [x] Dumps all the challenges by category.
- - [x] Download attached files.
- - [x] Prints a ✔️ or a :x: to indicate if the challenge is solved or not.
- - [x] Setup template file in challenge dir : writeup.md / solve.py (optionnal)
+- [x] Three auth methods — API token, session cookie, username + password
+- [x] Lists all unsolved challenges sorted by solve count
+- [x] Downloads challenge files into a `Category / Challenge / files` tree
+- [x] Auto-generates a `README.md` per challenge (description, points, connection info)
+- [x] Auto-refresh live report during an active CTF
+- [x] Dumps scoreboard, teams, users, and per-team solves to JSON
+- [x] Retry with exponential backoff on flaky connections
 
 ## Usage
 
 ```
-$ ./ctfd_parser.py -h
+$ python ctfd.py -h
+
        _____ _______ ______  _   _____
       / ____|__   __|  ____|| | |  __ \
      | |       | |  | |__ __| | | |__) |_ _ _ __ ___  ___ _ __
-     | |       | |  |  __/ _` | |  ___/ _` | '__/ __|/ _ \ '__|    v1.1
+     | |       | |  |  __/ _` | |  ___/ _` | '__/ __|/ _ \ '__|
      | |____   | |  | | | (_| | | |  | (_| | |  \__ \  __/ |
-      \_____|  |_|  |_|  \__,_| |_|   \__,_|_|  |___/\___|_|       @podalirius_
+      \_____|  |_|  |_|  \__,_| |_|   \__,_|_|  |___/\___|_|
 
-usage: ctfd_parser.py [-h] -t TARGET -u USER -p PASSWORD [-T THREADS] [-v]
-or
-usage: ctfd_parser.py [a config.json must be in project root dir, containing a least target, user & password]
+usage: ctfd.py [-h] [-U URL] [-k TOKEN] [-c COOKIE] [-u USER] [-p PASS]
+               [-o DIR] [-T N]
+               {list,report,download,dump} ...
 
-CTFdParser
+commands:
+  list        Print unsolved challenges sorted by solve count
+  report      Auto-refreshing unsolved challenge table
+  download    Download challenge files to disk
+  dump        Dump challenges, teams, users, scoreboard to JSON
 
-optional arguments:
-  -h, --help            show this help message and exit
-  -t TARGET, --target TARGET
-                        CTFd target (domain or ip)
-  -u USER, --user USER  Username to login to CTFd
-  -p PASSWORD, --password PASSWORD
-                        Password to login to CTFd
-  -T THREADS, --threads THREADS
-                        Number of threads (default: 8)
-  -v, --verbose         Verbose mode. (default: False)
-  -I, --initfile        Activate setup template files
+authentication:
+  -U, --url     CTFd base URL
+  -k, --token   API token
+  -c, --cookie  Session cookie value
+  -u, --user    Username
+  -p, --pass    Password
 
+optional:
+  -o, --output  Output directory  (default: ./ctfd_output)
+  -T, --threads Worker threads    (default: 8)
 ```
 
-## Demonstration
+Run without arguments for interactive mode:
 
-![](./.github/example.png)
+```
+$ python ctfd.py
+```
+
+## Installation
+
+```bash
+git clone https://github.com/hetsonii/ctfd-parser
+cd ctfd-parser
+pip install -r requirements.txt
+```
+
+## Examples
+
+```bash
+# List unsolved challenges
+python ctfd.py --url https://ctf.example.com --token TOKEN list
+
+# Download only unsolved challenges, skip files > 50 MB
+python ctfd.py --url https://ctf.example.com --token TOKEN download --only-unsolved --max-mb 50
+
+# Live report, refreshes every 30 seconds
+python ctfd.py --url https://ctf.example.com -u user -p pass report --interval 30
+
+# Dump everything to JSON
+python ctfd.py --url https://ctf.example.com --cookie SESSION dump
+```
 
 ## Contributors
 
