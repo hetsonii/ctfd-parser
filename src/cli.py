@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import requests
 from getpass import getpass
 
 from src.api  import CTFdClient, CTFdAPIError
@@ -25,7 +26,7 @@ from src      import downloader, reporter, dumper
 
 
 # ------------------------------------------------------------------ #
-#  Banner                                                              #
+#  Banner
 # ------------------------------------------------------------------ #
 
 def _banner() -> None:
@@ -40,7 +41,7 @@ def _banner() -> None:
 
 
 # ------------------------------------------------------------------ #
-#  Auth                                                                #
+#  Auth
 # ------------------------------------------------------------------ #
 
 def _build_client(args: argparse.Namespace) -> CTFdClient:
@@ -50,7 +51,10 @@ def _build_client(args: argparse.Namespace) -> CTFdClient:
         elif args.username and args.password:
             session = auth_password(args.url, args.username, args.password)
         else:
-            raise AuthError("No credentials provided — use --session or --username/--password")
+            print("[*] Using unauthenticated session (public CTFd)")
+            session = requests.Session()
+            session.headers.update({"Content-Type": "application/json"})
+
     except AuthError as exc:
         print(f"[-] Auth failed: {exc}", file=sys.stderr)
         sys.exit(1)
@@ -60,7 +64,7 @@ def _build_client(args: argparse.Namespace) -> CTFdClient:
 
 
 # ------------------------------------------------------------------ #
-#  Sub-command handlers                                                #
+#  Sub-command handlers
 # ------------------------------------------------------------------ #
 
 def cmd_list(client: CTFdClient, args: argparse.Namespace) -> None:
@@ -77,16 +81,18 @@ def cmd_download(client: CTFdClient, args: argparse.Namespace) -> None:
     print(f"[*] Downloading challenges to: {args.output}")
     result = downloader.download_challenges(
         client,
-        output_dir    = args.output,
-        only_unsolved = args.only_unsolved,
-        max_mb        = args.max_mb,
-        threads       = args.threads,
+        output_dir=args.output,
+        only_unsolved=args.only_unsolved,
+        max_mb=args.max_mb,
+        threads=args.threads,
     )
+
     print(
         f"\n[+] Done.  total={result.total}  ok={result.ok}  "
         f"skipped={result.skipped}  too_big={result.too_big}  "
         f"errors={len(result.errors)}"
     )
+
     for err in result.errors:
         print(f"  [!] {err}")
 
@@ -98,102 +104,183 @@ def cmd_dump(client: CTFdClient, args: argparse.Namespace) -> None:
 
 
 # ------------------------------------------------------------------ #
-#  Interactive mode                                                    #
+#  Interactive auth
 # ------------------------------------------------------------------ #
 
 def _prompt_auth() -> tuple[str, str | None, str | None, str | None]:
-    """Returns (url, username, password, session_cookie)."""
     url = input("CTFd URL: ").strip().rstrip("/")
+
     if not url.startswith("http"):
         url = "http://" + url
 
-    print("\nAuth method:\n  [1] Username + Password\n  [2] Session cookie")
+    print("\nAuth method:")
+    print("  [1] Username + Password")
+    print("  [2] Session cookie")
+    print("  [3] No auth (public CTFd)")
+
     while True:
-        choice = input("Choice [1/2]: ").strip()
-        if choice in ("1", "2"):
+        choice = input("Choice [1/2/3]: ").strip()
+        if choice in ("1", "2", "3"):
             break
 
     if choice == "1":
         user = input("Username: ").strip()
-        pw   = getpass("Password: ")
+        pw = getpass("Password: ")
         return url, user, pw, None
-    cookie = getpass("Session cookie: ")
-    return url, None, None, cookie
 
+    if choice == "2":
+        cookie = getpass("Session cookie: ")
+        return url, None, None, cookie
 
-def _interactive_menu(client: CTFdClient, output_dir: str) -> None:
-    default_interval = 60
-    default_threads  = 8
-
-    while True:
-        print("\n" + "=" * 42)
-        print("  [1] List unsolved challenges")
-        print("  [2] Auto-refresh report")
-        print("  [3] Download challenges + files")
-        print("  [4] Dump scoreboard / teams / users")
-        print("  [5] Exit")
-        print("=" * 42)
-        choice = input("Choice: ").strip()
-
-        if choice == "1":
-            reporter.report_once(client, threads=default_threads)
-
-        elif choice == "2":
-            raw      = input(f"Refresh interval in seconds [{default_interval}]: ").strip()
-            interval = int(raw) if raw.isdigit() else default_interval
-            reporter.report_loop(client, interval=interval, threads=default_threads)
-
-        elif choice == "3":
-            path = input(f"Output directory [{output_dir}]: ").strip() or output_dir
-            only = input("Only unsolved? [y/N]: ").strip().lower() == "y"
-            raw  = input("Max file size MB [100]: ").strip()
-            mb   = int(raw) if raw.isdigit() else 100
-            result = downloader.download_challenges(
-                client,
-                output_dir    = path,
-                only_unsolved = only,
-                max_mb        = mb,
-                threads       = default_threads,
-            )
-            print(
-                f"\n[+] Done.  total={result.total}  ok={result.ok}  "
-                f"skipped={result.skipped}  too_big={result.too_big}  "
-                f"errors={len(result.errors)}"
-            )
-            for err in result.errors:
-                print(f"  [!] {err}")
-
-        elif choice == "4":
-            path = input(f"Output directory [{output_dir}]: ").strip() or output_dir
-            dumper.dump_all(client, path)
-            print("[+] Dump complete.")
-
-        elif choice == "5":
-            print("Bye!")
-            break
-
-        else:
-            print("[!] Invalid choice.")
+    return url, None, None, None
 
 
 # ------------------------------------------------------------------ #
-#  Argument parser                                                     #
+#  Interactive menu
+# ------------------------------------------------------------------ #
+
+def _interactive_menu(client: CTFdClient, output_dir: str, auth_enabled: bool) -> None:
+
+    default_interval = 60
+    default_threads = 8
+
+    while True:
+
+        print("\n" + "=" * 42)
+
+        if auth_enabled:
+            print("Mode: AUTHENTICATED\n")
+            print("  [1] List unsolved challenges")
+            print("  [2] Auto-refresh report")
+            print("  [3] Download challenges + files")
+            print("  [4] Dump scoreboard / teams / users")
+            print("  [5] Exit")
+        else:
+            print("Mode: PUBLIC (no authentication)\n")
+            print("  [1] Download challenges + files")
+            print("  [2] Dump scoreboard / teams / users")
+            print("  [3] Exit")
+
+        print("=" * 42)
+
+        choice = input("Choice: ").strip()
+
+        # ---------------- AUTHENTICATED ----------------
+
+        if auth_enabled:
+
+            if choice == "1":
+                reporter.report_once(client, threads=default_threads)
+
+            elif choice == "2":
+                raw = input(f"Refresh interval in seconds [{default_interval}]: ").strip()
+                interval = int(raw) if raw.isdigit() else default_interval
+                reporter.report_loop(client, interval=interval, threads=default_threads)
+
+            elif choice == "3":
+
+                path = input(f"Output directory [{output_dir}]: ").strip() or output_dir
+                only = input("Only unsolved? [y/N]: ").strip().lower() == "y"
+
+                raw = input("Max file size MB [100]: ").strip()
+                mb = int(raw) if raw.isdigit() else 100
+
+                result = downloader.download_challenges(
+                    client,
+                    output_dir=path,
+                    only_unsolved=only,
+                    max_mb=mb,
+                    threads=default_threads,
+                )
+
+                print(
+                    f"\n[+] Done.  total={result.total}  ok={result.ok}  "
+                    f"skipped={result.skipped}  too_big={result.too_big}  "
+                    f"errors={len(result.errors)}"
+                )
+
+                for err in result.errors:
+                    print(f"  [!] {err}")
+
+            elif choice == "4":
+
+                path = input(f"Output directory [{output_dir}]: ").strip() or output_dir
+                dumper.dump_all(client, path)
+                print("[+] Dump complete.")
+
+            elif choice == "5":
+                print("Bye!")
+                break
+
+            else:
+                print("[!] Invalid choice.")
+
+        # ---------------- PUBLIC MODE ----------------
+
+        else:
+
+            if choice == "1":
+
+                path = input(f"Output directory [{output_dir}]: ").strip() or output_dir
+                raw = input("Max file size MB [100]: ").strip()
+                mb = int(raw) if raw.isdigit() else 100
+
+                result = downloader.download_challenges(
+                    client,
+                    output_dir=path,
+                    only_unsolved=False,
+                    max_mb=mb,
+                    threads=default_threads,
+                )
+
+                print(
+                    f"\n[+] Done.  total={result.total}  ok={result.ok}  "
+                    f"skipped={result.skipped}  too_big={result.too_big}  "
+                    f"errors={len(result.errors)}"
+                )
+
+                for err in result.errors:
+                    print(f"  [!] {err}")
+
+            elif choice == "2":
+
+                path = input(f"Output directory [{output_dir}]: ").strip() or output_dir
+                dumper.dump_all(client, path)
+                print("[+] Dump complete.")
+
+            elif choice == "3":
+                print("Bye!")
+                break
+
+            else:
+                print("[!] Invalid choice.")
+
+
+# ------------------------------------------------------------------ #
+#  Argument parser
 # ------------------------------------------------------------------ #
 
 def build_parser() -> argparse.ArgumentParser:
+
     p = argparse.ArgumentParser(
-        prog             = "ctfd",
-        description      = "CTFd challenge manager — list, download, dump.",
-        formatter_class  = argparse.RawDescriptionHelpFormatter,
+        prog="ctfd",
+        description="CTFd challenge manager — list, download, dump.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
-    auth = p.add_argument_group("authentication (one required for non-interactive use)")
-    auth.add_argument("--url",      "-U", metavar="URL",  help="CTFd base URL")
-    auth.add_argument("--session",  "-s", metavar="COOKIE", help="Session cookie value")
+    auth = p.add_argument_group("authentication")
+    auth.add_argument("--url", "-U", metavar="URL", help="CTFd base URL")
+    auth.add_argument("--session", "-s", metavar="COOKIE", help="Session cookie")
     auth.add_argument("--username", "-u", metavar="USER", help="Username")
     auth.add_argument("--password", "-p", metavar="PASS", help="Password")
 
-    p.add_argument("--output",  "-o", default=os.path.join(os.getcwd(), "ctfd_output"), metavar="DIR")
+    p.add_argument(
+        "--output",
+        "-o",
+        default=os.path.join(os.getcwd(), "ctfd_output"),
+        metavar="DIR",
+    )
+
     p.add_argument("--threads", "-T", type=int, default=8)
 
     sub = p.add_subparsers(dest="command", title="commands")
@@ -213,41 +300,57 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 # ------------------------------------------------------------------ #
-#  Main                                                                #
+#  Main
 # ------------------------------------------------------------------ #
 
 def main() -> int:
-    parser = build_parser()
-    args   = parser.parse_args()
 
-    # ── Interactive mode ─────────────────────────────────────────────
+    parser = build_parser()
+    args = parser.parse_args()
+
+    # ---------------- INTERACTIVE ----------------
+
     if args.command is None and not args.url:
+
         _banner()
+
         url, user, pw, cookie = _prompt_auth()
-        args.url      = url
-        args.session  = cookie
+
+        args.url = url
+        args.session = cookie
         args.username = user
         args.password = pw
 
-        print("[>] Logging in…")
         client = _build_client(args)
-        print("[+] Logged in.\n")
-        _interactive_menu(client, args.output)
+
+        auth_enabled = bool(args.session or (args.username and args.password))
+
+        if auth_enabled:
+            print("[+] Logged in.\n")
+        else:
+            print("[+] Connected (public mode).\n")
+
+        _interactive_menu(client, args.output, auth_enabled)
+
         return 0
 
-    # ── Non-interactive ───────────────────────────────────────────────
+    # ---------------- NON-INTERACTIVE ----------------
+
     if not args.url:
         parser.error("--url is required in non-interactive mode")
+
     if not args.command:
         parser.error("a command is required (list / report / download / dump)")
 
     client = _build_client(args)
 
     dispatch = {
-        "list":     cmd_list,
-        "report":   cmd_report,
+        "list": cmd_list,
+        "report": cmd_report,
         "download": cmd_download,
-        "dump":     cmd_dump,
+        "dump": cmd_dump,
     }
+
     dispatch[args.command](client, args)
+
     return 0
